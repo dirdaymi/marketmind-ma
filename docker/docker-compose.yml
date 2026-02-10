@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with pgvector
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: marketmind-postgres
+    environment:
+      POSTGRES_DB: marketmind
+      POSTGRES_USER: marketmind
+      POSTGRES_PASSWORD: marketmind123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketmind -d marketmind"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - marketmind-network
+
+  # Spring Boot Backend
+  backend:
+    build:
+      context: ../marketmind-backend
+      dockerfile: Dockerfile
+    container_name: marketmind-backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketmind
+      SPRING_DATASOURCE_USERNAME: marketmind
+      SPRING_DATASOURCE_PASSWORD: marketmind123
+      MARKETMIND_JWT_SECRET: ${MARKETMIND_JWT_SECRET:-marketmindSecretKey2024ForJwtTokenGenerationAndValidation}
+      MARKETMIND_NLP_SERVICE_URL: http://nlp-service:8000
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nlp-service:
+        condition: service_started
+    networks:
+      - marketmind-network
+    restart: unless-stopped
+
+  # Python NLP Service
+  nlp-service:
+    build:
+      context: ../marketmind-nlp
+      dockerfile: Dockerfile
+    container_name: marketmind-nlp
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      MODEL_NAME: sentence-transformers/all-MiniLM-L6-v2
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    volumes:
+      - nlp_models:/app/models
+    networks:
+      - marketmind-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # Angular Frontend (served via nginx)
+  frontend:
+    build:
+      context: ../marketmind-frontend
+      dockerfile: Dockerfile
+    container_name: marketmind-frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      - backend
+    networks:
+      - marketmind-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  nlp_models:
+
+networks:
+  marketmind-network:
+    driver: bridge
